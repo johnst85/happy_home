@@ -1,0 +1,18 @@
+{
+  "name": "happy-home",
+  "version": "0.1.0",
+  "private": true,
+  "description": "우리 가족 하루 체크 웹페이지 (집 로컬 네트워크 전용)",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-cron": "^4.2.1"
+  }
+}
