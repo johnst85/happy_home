@@ -1,6 +1,6 @@
 // 서비스 워커: 앱 화면(정적 파일)을 캐시해 빠르게 열고, 서버가 잠시 꺼져도 화면은 뜨게 함
-const CACHE = 'happy-home-v1';
-const SHELL = ['/', '/index.html', '/css/app.css', '/js/main.js', '/js/api.js', '/js/ui.js', '/js/fx.js', '/js/chars.js',
+const CACHE = 'happy-home-v2';
+const SHELL = ['/', '/index.html', '/css/app.css', '/js/main.js', '/js/api.js', '/js/ui.js', '/js/fx.js', '/js/chars.js', '/js/collect.js',
   '/js/home.js', '/js/scores.js', '/js/calendar.js', '/js/settings.js', '/manifest.webmanifest', '/icons/icon.svg'];
 
 self.addEventListener('install', (e) => {

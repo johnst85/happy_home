@@ -10,12 +10,12 @@ let raf = 0;
 let enabled = true;
 let last = 0;
 
-/** 포인트 누적에 따른 꾸미기 아이템 */
-export function itemsFor(points = 0) {
+/** 지금까지 모은 개수에 따른 꾸미기 아이템 */
+export function itemsFor(count = 0) {
   const items = [];
-  if (points >= 200) items.push('hat');
-  if (points >= 600) items.push('cape');
-  if (points >= 1200) items.push('crown');
+  if (count >= 30) items.push('hat');
+  if (count >= 100) items.push('cape');
+  if (count >= 200) items.push('crown');
   return items;
 }
 

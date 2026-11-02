@@ -7,6 +7,7 @@ import * as home from './home.js';
 import * as scores from './scores.js';
 import * as calendar from './calendar.js';
 import * as settings from './settings.js';
+import { styleOf } from './collect.js';
 
 const LS = {
   get(k, d = null) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } },
@@ -29,7 +30,7 @@ export const store = {
 
 const ROUTES = {
   home: { label: '오늘', icon: '🏠', view: home },
-  scores: { label: '점수', icon: '🏆', view: scores },
+  scores: { label: '포도밭', icon: '🍇', view: scores },
   calendar: { label: '달력', icon: '📅', view: calendar },
   settings: { label: '설정', icon: '⚙️', view: settings },
 };
@@ -54,6 +55,15 @@ function applyDisplay() {
   root.style.fontSize = `${Math.round(16 * (Number(s.font_scale) || 1))}px`;
   fxConfig.sound = s.sound === '1';
   document.body.classList.toggle('chars-on', s.characters === '1');
+  // 모으기 방식에 따라 메뉴 이름·아이콘 바꾸기
+  const st = styleOf(s);
+  ROUTES.scores.label = st.nav;
+  ROUTES.scores.icon = st.icon;
+  const link = document.querySelector('.nav-link[data-route="scores"]');
+  if (link) {
+    link.querySelector('.nav-icon').textContent = st.icon;
+    link.querySelector('.nav-label').textContent = st.nav;
+  }
 }
 
 // ---------------- 렌더

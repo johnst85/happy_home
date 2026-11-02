@@ -4,8 +4,11 @@ import { h, avatar, toast, errorToast, modal, fmtDate, nowHm, confirmBox } from 
 import { confetti, cheerPopup, banner, fireworksShow, rainConfetti, sounds } from './fx.js';
 import * as chars from './chars.js';
 import { reloadToday, render as rerender, mediaDevice, askParent } from './main.js';
+import { styleOf, progressOf, renderPersonal, renderFamily } from './collect.js';
 
 let shownGrants = false;
+let freshMember = null; // 방금 체크한 구성원 → 모음 그림에서 새로 생긴 알을 톡 튀게
+const gainText = (st, n = 1) => `${st.gain}${n > 1 ? ` ×${n}` : ''}`;
 const pick = (arr, d) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : d);
 
 function doneInfo(task, memberId, comps) {
@@ -39,7 +42,7 @@ export function render(el, store) {
   }
 
   const encouragements = boot.settings.encouragements;
-  const lateRatio = Number(boot.settings.late_ratio || 0.5);
+  const st = styleOf(boot.settings);
   const lateAllowed = boot.settings.late_allowed === '1';
 
   const card = (t) => {
@@ -57,8 +60,8 @@ export function render(el, store) {
       h('div', { class: 'task-meta' },
         !!t.is_family && h('span', { class: 'tag tag-family' }, '👨‍👩‍👧 가족 함께'),
         done
-          ? h('span', { class: 'tag tag-done' }, done.is_late ? `늦게라도 했어요 +${done.points}` : `+${done.points}점`)
-          : h('span', { class: 'tag' }, `${t.points}점`),
+          ? h('span', { class: 'tag tag-done' }, done.is_late ? `늦게라도 했어요 ${gainText(st, done.points)}` : `${gainText(st, done.points)} 모았어요`)
+          : h('span', { class: 'tag tag-gain', title: `하면 ${st.name}에 ${t.points}${st.unit}` }, gainText(st, t.points)),
         !done && t.deadline && h('span', { class: 'task-deadline' }, `~${t.deadline}`),
         doer && h('span', { class: 'task-doer' }, `${doer.name}이(가) 했어요`))),
     h('div', { class: 'task-check' }, done ? '✔' : ''));
@@ -68,7 +71,7 @@ export function render(el, store) {
         h('span', { class: 'okay-face' }, avatar(me, 'xs')),
         h('span', { class: 'okay-text' }, pick(encouragements, '괜찮아, 그럴 수도 있지!')),
         lateAllowed && h('button', { class: 'btn btn-sm btn-retry', onclick: (e) => { e.stopPropagation(); check(t, el, store, true); } },
-          `다시 도전 +${Math.round(t.points * lateRatio)}`)));
+          `다시 도전 ${st.gain}`)));
     }
     if (done && store.parent) {
       el.append(h('button', { class: 'task-undo', title: '체크 취소 (부모)', onclick: async (e) => {
@@ -140,7 +143,9 @@ async function check(task, el, store, late) {
     cheerPopup(late ? '늦게라도 했어요! 👏' : pick(store.boot.settings.cheers, '최고! 👍'), x, y - 30);
     chars.cheer(me.id, late ? '해냈다! 늦어도 괜찮아 😊' : pick(['해냈다! 🙌', '야호!', '나 최고!', '💪'], '해냈다!'));
 
-    toast(`${task.icon} ${task.name} 완료! +${r.completion.points}점`, {
+    freshMember = me.id;
+    const stl = styleOf(store.boot.settings);
+    toast(`${task.icon} ${task.name} 완료! ${stl.key === 'tree' ? '💧 물을 줬어요' : `${gainText(stl, r.completion.points)} 모았어요`}`, {
       duration: 5000,
       actionLabel: '되돌리기',
       action: async () => {
@@ -156,7 +161,25 @@ async function check(task, el, store, late) {
         sounds.clear();
       }, 700);
     }
-    if (r.family_cleared) setTimeout(celebrateFamily, r.slot_cleared ? 3200 : 800);
+    let delay = r.slot_cleared ? 3200 : 700;
+    if (r.collection_filled) {
+      setTimeout(() => {
+        banner(stl.full, r.collection_reward ? `🎁 ${r.collection_reward} — 기간이 끝나면 보상을 받아요!` : `${me.name} 정말 대단해요!`, { emoji: stl.icon, big: true, duration: 3500 });
+        rainConfetti(2200);
+        sounds.clear();
+      }, delay);
+      delay += 3800;
+    }
+    if (r.family_filled) {
+      setTimeout(() => {
+        banner(`${stl.family} 완성!`, `우리 가족이 함께 해냈어요! ${r.family_reward || ''}`, { emoji: stl.familyIcon, big: true, duration: 4000 });
+        fireworksShow(8);
+        sounds.family();
+        chars.dance(5000);
+      }, delay);
+      delay += 4200;
+    }
+    if (r.family_cleared) setTimeout(celebrateFamily, delay);
     await reloadToday();
     setTimeout(rerender, 450);
   } catch (e) {
@@ -184,7 +207,7 @@ function celebrateGrants(store) {
     h('ul', { class: 'grant-list' }, list.map((g) => h('li', {},
       g.member_id ? avatar(store.member(g.member_id), 'sm') : h('span', { class: 'big-emoji-sm' }, '👨‍👩‍👧‍👦'),
       h('div', {}, h('strong', {}, `${g.member_id ? g.member_name : '우리 가족'} — ${g.content}`),
-        h('div', { class: 'muted' }, `${g.period_start} ~ ${g.period_end} · ${g.points}점`))))),
+        h('div', { class: 'muted' }, `${g.period_start} ~ ${g.period_end}`))))),
     h('p', { class: 'muted' }, '보상은 부모님이 주시면 "지급 완료"로 표시해요.')), {
     title: '축하해요! 🎉',
     onClose: () => post('/api/grants/seen', { ids: list.map((g) => g.id) }).catch(() => {}),
@@ -232,17 +255,15 @@ function memberStrip(store) {
     h('span', { class: 'member-sub' }, '바꾸기')));
 }
 
-function progressBar(value, max, color) {
-  const p = max ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return h('div', { class: 'bar', role: 'progressbar', 'aria-valuenow': value, 'aria-valuemax': max },
-    h('div', { class: 'bar-fill', style: { width: `${p}%`, background: color || 'var(--accent)' } }));
-}
-
 function sideCards(store, me, tasks) {
   const { today, boot } = store;
   const st = today.status[me.id] || { done: 0, scheduled: 0, points: 0 };
   const period = today.period;
-  const myPts = period.points[me.id] || 0;
+  const sty = styleOf(boot.settings);
+  const count = period.points[me.id] || 0;
+  const pr = progressOf(count, period.marks?.[me.id], period.tiers?.[me.id] || [], boot.settings);
+  const fresh = freshMember === me.id ? 1 : 0;
+  freshMember = null;
   const cards = [];
 
   cards.push(h('div', { class: 'card me-card', style: { '--mc': me.color } },
@@ -250,11 +271,16 @@ function sideCards(store, me, tasks) {
       h('div', {},
         h('div', { class: 'me-name' }, me.name, me.role === 'parent' && h('span', { class: 'tag' }, '부모')),
         h('div', { class: 'me-big' }, st.done ? `오늘 ${st.done}개 해냈어!` : '오늘도 시작해 볼까? 😊'))),
-    h('div', { class: 'me-stats' },
-      h('div', {}, h('b', {}, `${st.points}`), h('small', {}, '오늘 점수')),
-      h('div', {}, h('b', {}, `${myPts}`), h('small', {}, period.label)),
+    h('a', { class: 'me-collect', href: '#/scores', title: `${sty.nav} 보기` },
+      renderPersonal(sty.key, { member: me, size: pr.current.size, marks: pr.marks, seed: me.id * 31 + pr.done.length + 1, mini: true, fresh }),
+      h('div', { class: 'me-collect-text' },
+        h('b', {}, `${sty.icon} ${period.label}`),
+        h('span', {}, count ? (sty.noNumbers ? sty.left() : sty.got(count)) : '첫 번째를 모아 볼까?'),
+        pr.done.length > 0 && h('span', { class: 'muted small' }, `${sty.coll} ${pr.done.length}개 완성!`),
+        pr.current.reward && h('span', { class: 'muted small' }, `🎁 다 채우면 ${pr.current.reward}`))),
+    h('div', { class: 'me-stats me-stats-2' },
+      h('div', {}, h('b', {}, `${st.done}개`), h('small', {}, '오늘 한 일')),
       h('div', {}, h('b', {}, `🔥 ${today.streaks[me.id] || 0}`), h('small', {}, '연속 달성'))),
-    st.scheduled > 0 && progressBar(st.done, st.scheduled, me.color),
     h('button', { class: 'btn btn-light btn-block', onclick: () => dayEnd(store) }, '🌙 하루 마무리 보기')));
 
   // 쉬어가기권
@@ -275,15 +301,14 @@ function sideCards(store, me, tasks) {
       } }, '쉬어가기권 쓰기')));
   }
 
-  // 가족 목표
+  // 가족이 함께 채우기
   const fr = period.family_rewards || [];
   if (fr.length) {
     const next = fr.find((r) => r.threshold > period.family) || fr[fr.length - 1];
-    cards.push(h('div', { class: 'card family-card' },
-      h('div', { class: 'card-title' }, '👨‍👩‍👧‍👦 가족 협동 목표', h('span', { class: 'muted' }, ` · ${period.label}`)),
-      h('div', { class: 'family-goal' }, h('b', {}, `${period.family}`), ` / ${next.threshold}점`),
-      progressBar(period.family, next.threshold, 'linear-gradient(90deg, #ff5d8f, #ffb020, #2ec27e, #4f8cff)'),
-      h('div', { class: 'muted' }, period.family >= next.threshold ? `🎉 달성! ${next.content}` : `${next.threshold - period.family}점 더 모으면 ${next.content}`)));
+    cards.push(h('a', { class: 'card family-card', href: '#/scores' },
+      h('div', { class: 'card-title' }, `${sty.familyIcon} ${sty.family}`, h('span', { class: 'muted' }, ` · ${period.label}`)),
+      renderFamily(sty.key, { marks: (period.family_marks || []).slice(0, next.threshold), capacity: next.threshold, members: boot.members, photo: boot.settings.family_photo, mini: true }),
+      h('div', { class: 'muted' }, period.family >= next.threshold ? `🎉 다 채웠어요! ${next.content}` : `함께 채우면 ${next.content}`)));
   }
 
   // 지금 체크할 남은 일

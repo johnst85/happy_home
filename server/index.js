@@ -144,6 +144,8 @@ app.get('/api/today', (req, res) => {
   const pts = L.pointsBetween(period.start, period.end);
   const famPts = Object.values(pts).reduce((a, b) => a + b, 0);
   const famRewards = db.prepare("SELECT * FROM rewards WHERE target = 'family' AND period = ? ORDER BY threshold").all(periodType);
+  const marks = L.marksBetween(period.start, period.end);
+  const tiers = Object.fromEntries(members.map((m) => [m.id, L.rewardsFor(m.id, periodType, members).map(({ threshold, content }) => ({ threshold, content }))]));
   res.json({
     date: today,
     time: L.hm(),
@@ -153,7 +155,7 @@ app.get('/api/today', (req, res) => {
     rest,
     yesterday,
     events: L.eventsBetween(today, today),
-    period: { ...period, points: pts, family: famPts, family_rewards: famRewards },
+    period: { ...period, points: pts, family: famPts, family_rewards: famRewards, marks: marks.byMember, family_marks: marks.family, tiers },
     new_grants: grantsQuery('WHERE g.celebrated = 0 ORDER BY g.id', []),
     lifetime: L.pointsBetween('0000-01-01', '9999-12-31'),
   });
@@ -178,8 +180,9 @@ app.post('/api/completions', (req, res) => {
 
   const late = !!(task.deadline && now > task.deadline);
   if (late && getSetting('late_allowed') !== '1' && !parent) fail(403, '마감이 지났어요');
-  const ratio = Math.max(0, Math.min(1, Number(getSetting('late_ratio') || 0.5)));
-  const points = late ? Math.round(task.points * ratio) : task.points;
+  // 늦게 해도 똑같이 모아요 (화면에서는 연한 색으로 표시)
+  const ratio = Math.max(0, Math.min(1, Number(getSetting('late_ratio') ?? 1)));
+  const points = late ? Math.max(1, Math.round(task.points * ratio)) : task.points;
   let method = ['touch', 'face', 'proxy'].includes(req.body?.method) ? req.body.method : 'touch';
   if (method === 'proxy' && !parent) method = 'touch';
 
@@ -199,12 +202,27 @@ app.post('/api/completions', (req, res) => {
   const withTasks = members.filter((m) => st[m.id]?.scheduled > 0);
   const familyCleared = withTasks.length > 0 && withTasks.every((m) => st[m.id].achieved);
 
+  // 송이(모음)를 다 채웠는지
+  const ptype = getSetting('reward_period') || 'week';
+  const per = L.getPeriod(ptype, today, 0);
+  const pts = L.pointsBetween(per.start, per.end);
+  const size = Math.max(1, int(getSetting('collection_size'), 20));
+  const mine = pts[memberId] || 0;
+  const filled = L.filledBetween(mine - points, mine, L.rewardsFor(memberId, ptype, members), size);
+  const famNow = Object.values(pts).reduce((a, b) => a + b, 0);
+  const famTiers = db.prepare("SELECT threshold, content FROM rewards WHERE target = 'family' AND period = ?").all(ptype);
+  const famHit = famTiers.find((t) => famNow - points < t.threshold && t.threshold <= famNow) || null;
+
   const payload = {
     completion,
     task: { id: task.id, name: task.name, icon: task.icon, is_family: task.is_family },
     slot_cleared: slotCleared,
     day_cleared: !!st[memberId]?.achieved,
     family_cleared: familyCleared,
+    collection_filled: filled.filled,
+    collection_reward: filled.reward,
+    family_filled: !!famHit,
+    family_reward: famHit?.content || null,
   };
   broadcast('completion', payload);
   res.json(payload);
@@ -241,6 +259,7 @@ app.get('/api/scores', (req, res) => {
   const p = L.getPeriod(type, today, offset);
   const members = L.loadMembers();
   const pts = L.pointsBetween(p.start, p.end);
+  const marks = L.marksBetween(p.start, p.end);
   const until = p.end < today ? p.end : today;
   const st = p.start <= until ? L.statusRange(p.start, until, { members }) : {};
   const grants = db.prepare('SELECT * FROM reward_grants WHERE period_start = ? AND period = ?').all(p.start, type);
@@ -251,7 +270,7 @@ app.get('/api/scores', (req, res) => {
     const rewards = L.rewardsFor(m.id, type, members).map((r) => ({
       ...r, grant: grants.find((g) => g.reward_id === r.id && g.member_id === m.id) || null,
     }));
-    return { id: m.id, points: pts[m.id] || 0, done, scheduled, rewards };
+    return { id: m.id, points: pts[m.id] || 0, marks: marks.byMember[m.id] || '', done, scheduled, rewards };
   });
   const famRewards = db.prepare("SELECT * FROM rewards WHERE target = 'family' AND period = ? ORDER BY threshold").all(type)
     .map((r) => ({ ...r, grant: grants.find((g) => g.reward_id === r.id && g.member_id === 0) || null }));
@@ -259,32 +278,23 @@ app.get('/api/scores', (req, res) => {
     period: p,
     finished: p.end < today,
     members: out,
-    family: { points: Object.values(pts).reduce((a, b) => a + b, 0), rewards: famRewards },
+    family: { points: Object.values(pts).reduce((a, b) => a + b, 0), marks: marks.family, rewards: famRewards },
   });
 });
 
-app.get('/api/scores/trend', (req, res) => {
+// 지난 기록: 한 구성원의 최근 기간별 모은 개수 (다른 사람과 겹쳐 비교하지 않음)
+app.get('/api/scores/history', (req, res) => {
   const today = L.ymd();
-  const members = L.loadMembers();
-  const labels = [];
-  const series = Object.fromEntries(members.map((m) => [m.id, []]));
-  if (req.query.mode === 'weeks') {
-    for (let off = -3; off <= 0; off++) {
-      const p = L.getPeriod('week', today, off);
-      labels.push(off === 0 ? '이번 주' : p.range.split(' ~ ')[0]);
-      const pts = L.pointsBetween(p.start, p.end);
-      for (const m of members) series[m.id].push(pts[m.id] || 0);
-    }
-  } else {
-    const wk = ['일', '월', '화', '수', '목', '금', '토'];
-    for (let i = 6; i >= 0; i--) {
-      const d = L.addDays(today, -i);
-      labels.push(i === 0 ? '오늘' : `${L.parseYmd(d).getDate()}(${wk[L.weekday(d)]})`);
-      const pts = L.pointsBetween(d, d);
-      for (const m of members) series[m.id].push(pts[m.id] || 0);
-    }
+  const type = ['day', 'week', 'month'].includes(req.query.period) ? req.query.period : (getSetting('reward_period') || 'week');
+  const memberId = int(req.query.member_id);
+  const count = Math.max(1, Math.min(12, int(req.query.count, 8)));
+  const out = [];
+  for (let off = 0; off > -count; off--) {
+    const p = L.getPeriod(type, today, off);
+    const pts = L.pointsBetween(p.start, p.end);
+    out.push({ ...p, offset: off, units: memberId ? (pts[memberId] || 0) : Object.values(pts).reduce((a, b) => a + b, 0) });
   }
-  res.json({ labels, series });
+  res.json(out);
 });
 
 function grantsQuery(where, params) {
@@ -451,6 +461,23 @@ app.post('/api/members/:id/photo', P, (req, res) => {
   changed('members');
   res.json({ url: `/photos/${file}` });
 });
+app.post('/api/family-photo', P, (req, res) => {
+  const old = getSetting('family_photo');
+  if (req.body?.dataUrl === null) {
+    removePhoto(old);
+    setSetting('family_photo', '');
+    changed('settings');
+    return res.json({ ok: true });
+  }
+  const match = /^data:image\/(png|jpeg|webp);base64,(.+)$/.exec(req.body?.dataUrl || '');
+  if (!match) fail(400, '이미지 형식이 올바르지 않아요');
+  const file = `family-${Date.now()}.${match[1] === 'jpeg' ? 'jpg' : match[1]}`;
+  fs.writeFileSync(path.join(PHOTO_DIR, file), Buffer.from(match[2], 'base64'));
+  removePhoto(old);
+  setSetting('family_photo', `/photos/${file}`);
+  changed('settings');
+  res.json({ url: `/photos/${file}` });
+});
 app.put('/api/members-order', P, (req, res) => {
   const st = db.prepare('UPDATE members SET sort = ? WHERE id = ?');
   tx(() => (req.body?.ids || []).forEach((id, i) => st.run(i + 1, int(id))));
@@ -501,7 +528,7 @@ function taskInput(b) {
   return {
     name,
     icon: str(b.icon, 16) || '✅',
-    points: Math.max(0, Math.min(1000, int(b.points, 10))),
+    points: Math.max(1, Math.min(5, int(b.points, 1))),
     slot_id: b.slot_id ? int(b.slot_id) : null,
     deadline: time(b.deadline),
     days,
@@ -583,7 +610,7 @@ app.delete('/api/rewards/:id', P, (req, res) => {
 });
 
 // 일반 설정
-const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => k !== 'last_settled');
+const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => !['last_settled', 'family_photo'].includes(k));
 app.put('/api/settings', P, (req, res) => {
   for (const [k, v] of Object.entries(req.body || {})) {
     if (!SETTING_KEYS.includes(k)) continue;

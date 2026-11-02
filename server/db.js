@@ -133,7 +133,10 @@ const DEFAULT_SETTINGS = {
   month_start: '1',
   parents_rewarded: '0',
   late_allowed: '1',
-  late_ratio: '0.5',
+  late_ratio: '1',
+  reward_style: 'grape',
+  collection_size: '20',
+  family_photo: '',
   rest_tickets_per_week: '1',
   encouragements: JSON.stringify([
     '괜찮아, 그럴 수도 있지!',
@@ -182,15 +185,15 @@ function seed() {
   const ALL = '0,1,2,3,4,5,6';
   const WEEKDAY = '1,2,3,4,5';
   const kidTasks = [
-    ['인사하기', '👋', 5, morning, '09:00', ALL],
-    ['아침 물 마시기', '💧', 5, morning, '09:00', ALL],
-    ['유산균 먹기', '🦠', 5, morning, '09:00', ALL],
-    ['비타민 C 먹기', '🍊', 5, morning, '09:00', ALL],
-    ['양치하기', '🪥', 10, morning, '09:00', ALL],
-    ['옷입기', '👕', 10, morning, '09:00', WEEKDAY],
-    ['양말 신기', '🧦', 5, morning, '09:00', WEEKDAY],
-    ['하원 후 가방정리', '🎒', 10, after, '18:30', WEEKDAY],
-    ['오늘 입은 옷 세탁실에 가져다 두기', '🧺', 10, night, '21:00', ALL],
+    ['인사하기', '👋', 1, morning, '09:00', ALL],
+    ['아침 물 마시기', '💧', 1, morning, '09:00', ALL],
+    ['유산균 먹기', '🦠', 1, morning, '09:00', ALL],
+    ['비타민 C 먹기', '🍊', 1, morning, '09:00', ALL],
+    ['양치하기', '🪥', 1, morning, '09:00', ALL],
+    ['옷입기', '👕', 1, morning, '09:00', WEEKDAY],
+    ['양말 신기', '🧦', 1, morning, '09:00', WEEKDAY],
+    ['하원 후 가방정리', '🎒', 1, after, '18:30', WEEKDAY],
+    ['오늘 입은 옷 세탁실에 가져다 두기', '🧺', 1, night, '21:00', ALL],
   ];
   let sort = 1;
   for (const [name, icon, pts, slot, dl, days] of kidTasks) {
@@ -198,29 +201,46 @@ function seed() {
     for (const k of kids) a.run(id, k);
   }
   const parentTasks = [
-    [mom, '아침 물 마시기', '💧', 5, morning, '09:00', ALL],
-    [mom, '책 10쪽 읽기', '📖', 10, night, '22:30', ALL],
-    [mom, '아이들과 대화 10분', '💬', 10, after, '21:00', ALL],
-    [dad, '아침 물 마시기', '💧', 5, morning, '09:00', ALL],
-    [dad, '책 10쪽 읽기', '📖', 10, night, '22:30', ALL],
-    [dad, '아이들과 대화 10분', '💬', 10, after, '21:00', ALL],
+    [mom, '아침 물 마시기', '💧', 1, morning, '09:00', ALL],
+    [mom, '책 10쪽 읽기', '📖', 1, night, '22:30', ALL],
+    [mom, '아이들과 대화 10분', '💬', 1, after, '21:00', ALL],
+    [dad, '아침 물 마시기', '💧', 1, morning, '09:00', ALL],
+    [dad, '책 10쪽 읽기', '📖', 1, night, '22:30', ALL],
+    [dad, '아이들과 대화 10분', '💬', 1, after, '21:00', ALL],
   ];
   for (const [who, name, icon, pts, slot, dl, days] of parentTasks) {
     const id = t.run(name, icon, pts, slot, dl, days, 0, sort++).lastInsertRowid;
     a.run(id, who);
   }
-  const fam = t.run('자기 전 거실 정리', '🧸', 15, night, '21:30', ALL, 1, sort++).lastInsertRowid;
+  const fam = t.run('자기 전 거실 정리', '🧸', 1, night, '21:30', ALL, 1, sort++).lastInsertRowid;
   for (const who of [mom, dad, kid1, kid2]) a.run(fam, who);
 
   const r = db.prepare('INSERT INTO rewards (target, member_id, period, threshold, content) VALUES (?, ?, ?, ?, ?)');
   for (const k of kids) {
-    r.run('member', k, 'week', 250, '아이스크림 🍦');
-    r.run('member', k, 'week', 400, '주말 영화 고르기 🎬');
+    r.run('member', k, 'week', 30, '아이스크림 🍦');
+    r.run('member', k, 'week', 55, '주말 영화 고르기 🎬');
   }
-  r.run('family', null, 'week', 1200, '가족 외식 🍕');
+  r.run('family', null, 'week', 140, '가족 외식 🍕');
+  ins.run('units_migrated', '1');
 }
 
 seed();
+
+// v0.2: "점수" → "모으기 개수" 전환 (할 일마다 1개, 늦게 해도 똑같이 1개)
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'units_migrated'").get()) {
+  db.exec('BEGIN');
+  try {
+    db.exec('UPDATE tasks SET points = 1');
+    db.exec('UPDATE completions SET points = 1');
+    db.exec('UPDATE rewards SET threshold = MAX(1, CAST(ROUND(threshold / 8.0) AS INTEGER))');
+    db.exec('UPDATE reward_grants SET points = (SELECT COUNT(*) FROM completions c WHERE c.date BETWEEN reward_grants.period_start AND reward_grants.period_end AND (reward_grants.member_id = 0 OR c.member_id = reward_grants.member_id))');
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('late_ratio', '1'), ('units_migrated', '1')").run();
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
 
 function getSettings() {
   const out = {};

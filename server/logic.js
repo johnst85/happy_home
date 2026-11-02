@@ -136,6 +136,30 @@ function pointsBetween(start, end) {
   return out;
 }
 
+/** 기간 안에 모은 것을 시간 순서대로: 구성원별 '0'(제때)/'1'(늦게) 문자열, 가족은 구성원 id 배열 */
+function marksBetween(start, end) {
+  const rows = db.prepare('SELECT member_id, points, is_late FROM completions WHERE date BETWEEN ? AND ? ORDER BY checked_at, id').all(start, end);
+  const byMember = {};
+  const family = [];
+  for (const r of rows) {
+    const n = Math.max(0, r.points);
+    byMember[r.member_id] = (byMember[r.member_id] || '') + (r.is_late ? '1' : '0').repeat(n);
+    for (let i = 0; i < n; i++) family.push(r.member_id);
+  }
+  return { byMember, family };
+}
+
+/** before → after 사이에 송이(모음) 하나를 다 채웠는지. tiers: 보상 기준 개수 오름차순 */
+function filledBetween(before, after, tiers, size) {
+  const ts = tiers.map((t) => t.threshold).sort((a, b) => a - b);
+  const hit = tiers.find((t) => before < t.threshold && t.threshold <= after);
+  if (hit) return { filled: true, reward: hit.content };
+  const last = ts.length ? ts[ts.length - 1] : 0;
+  size = Math.max(1, size);
+  if (after > last && Math.floor((after - last) / size) > Math.floor(Math.max(0, before - last) / size)) return { filled: true, reward: null };
+  return { filled: false, reward: null };
+}
+
 function restInfo(memberId, today = ymd()) {
   const per = Number(getSetting('rest_tickets_per_week') || 1);
   const wk = getPeriod('week', today, 0);
@@ -226,5 +250,5 @@ function publicSettings() {
 module.exports = {
   ymd, hm, parseYmd, addDays, weekday, daysBetween, isYmd,
   getPeriod, loadTasks, loadMembers, statusRange, streakFor, pointsBetween,
-  restInfo, rewardsFor, settle, eventsBetween, publicSettings, eligibleMembers,
+  restInfo, rewardsFor, settle, marksBetween, filledBetween, eventsBetween, publicSettings, eligibleMembers,
 };

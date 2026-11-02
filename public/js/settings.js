@@ -3,8 +3,10 @@ import { get, post, put, del, api, auth } from './api.js';
 import { h, avatar, form, formModal, confirmBox, errorToast, toast, pickImage, dayNames } from './ui.js';
 import { askParent, reloadBoot, reloadToday, render as rerender, mediaDevice } from './main.js';
 import { sounds } from './fx.js';
+import { STYLES, styleOf, renderPersonal, renderFamily } from './collect.js';
 
 const SECTIONS = [
+  ['collect', '🍇', '모으기 방식'],
   ['members', '👨‍👩‍👧‍👦', '구성원'],
   ['tasks', '✅', '할 일'],
   ['slots', '⏰', '시간대'],
@@ -15,7 +17,7 @@ const SECTIONS = [
   ['display', '🎨', '화면'],
   ['security', '🛡️', '보안·관리'],
 ];
-const state = { section: 'members' };
+const state = { section: 'collect' };
 const TASK_ICONS = ['👋', '💧', '🦠', '🍊', '🪥', '👕', '🧦', '🎒', '🧺', '🧸', '📖', '💬', '🛏️', '🍽️', '🧼', '🙏', '🏃', '🎹', '✏️', '🌱'];
 const MEMBER_EMOJI = ['👩', '👨', '🧒', '👧', '👦', '👶', '👵', '👴', '🐶', '🐱', '🦊', '🐼', '🐯', '🐰'];
 const COLORS = ['#ff6b8b', '#4f8cff', '#ffb020', '#2ec27e', '#a66bff', '#ff7a45', '#13c2c2', '#e64980'];
@@ -40,7 +42,7 @@ export function render(el, store) {
     h('button', { class: state.section === k ? 'on' : '', onclick: () => { state.section = k; rerender(); } }, h('span', {}, icon), label)));
   const body = h('div', { class: 'set-body' });
   el.replaceChildren(h('div', { class: 'settings' }, nav, body));
-  const fn = { members, tasks, slots, rewards, okay, calendar, media, display, security }[state.section];
+  const fn = { collect, members, tasks, slots, rewards, okay, calendar, media, display, security }[state.section];
   Promise.resolve(fn(body, store)).catch(errorToast);
 }
 
@@ -60,6 +62,49 @@ function settingsForm(store, fields, { transform } = {}) {
       await refresh();
     } catch (e) { errorToast(e); }
   } }, '저장')));
+}
+
+// ---------------- 모으기 방식
+function collect(body, store) {
+  const s = store.boot.settings;
+  const cur = styleOf(s).key;
+  const sample = store.boot.members.find((m) => m.role === 'child') || store.boot.members[0];
+  const choose = async (key) => {
+    try {
+      await put('/api/settings', { reward_style: key });
+      toast(`${STYLES[key].icon} ${STYLES[key].name}(으)로 바꿨어요`);
+      await refresh();
+    } catch (e) { errorToast(e); }
+  };
+  const cards = h('div', { class: 'style-cards', role: 'radiogroup', 'aria-label': '모으기 방식' }, Object.values(STYLES).map((st) =>
+    h('button', { class: `style-card ${st.key === cur ? 'on' : ''}`, role: 'radio', 'aria-checked': st.key === cur ? 'true' : 'false', onclick: () => choose(st.key) },
+      h('div', { class: 'style-card-head' }, h('span', { class: 'style-card-icon' }, st.icon), h('b', {}, st.name), st.key === cur && h('span', { class: 'tag tag-done' }, '사용 중')),
+      h('div', { class: 'style-preview' },
+        renderPersonal(st.key, { member: sample, size: 12, marks: '00000001', seed: 3, mini: true }),
+        renderFamily(st.key, { marks: store.boot.members.flatMap((m) => [m.id, m.id, m.id]).slice(0, 10), capacity: 20, members: store.boot.members, photo: s.family_photo, mini: true })),
+      h('p', { class: 'muted small' }, st.desc),
+      h('p', { class: 'small' }, h('b', {}, '가족: '), st.family, ' — ', st.familyDesc))));
+
+  const familyPhoto = h('div', { class: 'card' },
+    h('div', { class: 'card-title' }, '🖼️ 가족 사진 (퍼즐 맞추기용)'),
+    h('p', { class: 'muted small' }, '"퍼즐 맞추기"에서 가족이 함께 맞추는 그림이에요. 없으면 구성원 얼굴을 모아서 보여줘요.'),
+    s.family_photo && h('img', { class: 'family-photo-preview', src: s.family_photo, alt: '가족 사진' }),
+    h('div', { class: 'row-wrap' },
+      h('button', { class: 'btn btn-light', onclick: async () => {
+        const dataUrl = await pickImage({ size: 900, square: false });
+        if (!dataUrl) return;
+        try { await post('/api/family-photo', { dataUrl }); toast('가족 사진을 올렸어요 📸'); await refresh(); } catch (e) { errorToast(e); }
+      } }, '📷 가족 사진 올리기'),
+      s.family_photo && h('button', { class: 'btn btn-ghost', onclick: async () => {
+        try { await post('/api/family-photo', { dataUrl: null }); await refresh(); } catch (e) { errorToast(e); }
+      } }, '지우기')));
+
+  body.append(section('모으기 방식', '숫자 점수 대신 할 일 하나를 할 때마다 하나씩 모아요. 모든 할 일은 똑같이 1개, 늦게 해도 똑같이 1개(연한 색)예요. 언제 바꿔도 모은 기록은 그대로예요.',
+    cards,
+    settingsForm(store, [
+      { key: 'collection_size', label: `보상이 없을 때 한 ${styleOf(s).coll} 크기 (부모, 또는 마지막 보상 이후)`, type: 'number', min: 5, max: 100 },
+    ]),
+    familyPhoto));
 }
 
 // ---------------- 구성원
@@ -117,13 +162,13 @@ function tasks(body, store) {
     title: t.id ? '할 일 수정' : '할 일 추가',
     ctx: { members: ms },
     values: {
-      name: t.name || '', icon: t.icon || '✅', points: t.points ?? 10, slot_id: t.slot_id ?? slots[0]?.id ?? '',
+      name: t.name || '', icon: t.icon || '✅', points: t.points ?? 1, slot_id: t.slot_id ?? slots[0]?.id ?? '',
       deadline: t.deadline || '', days: t.days || [0, 1, 2, 3, 4, 5, 6], assignees: t.assignees || [], is_family: t.is_family || 0, active: t.active ?? 1,
     },
     fields: [
       { key: 'name', label: '이름', maxlength: 60 },
       { key: 'icon', label: '아이콘', type: 'emoji', options: TASK_ICONS },
-      { key: 'points', label: '포인트', type: 'number', min: 0, max: 1000 },
+      { key: 'points', label: `모으는 개수 (보통 1 — 모든 할 일을 똑같이 하는 걸 권해요)`, type: 'number', min: 1, max: 5 },
       { key: 'slot_id', label: '시간대', type: 'select', options: [...slots.map((s) => [s.id, `${s.name} (${s.start_time}~${s.end_time})`]), ['', '언제든']] },
       { key: 'deadline', label: '마감 시각 (지나면 "괜찮아" + 늦은 체크)', type: 'time' },
       { key: 'days', label: '반복 요일', type: 'days' },
@@ -145,14 +190,14 @@ function tasks(body, store) {
   };
   const groups = [...slots.map((s) => [s, list.filter((t) => t.slot_id === s.id)]), [{ id: 0, name: '언제든' }, list.filter((t) => !slots.some((s) => s.id === t.slot_id))]]
     .filter(([, l]) => l.length);
-  body.append(section('할 일', '구성원별 할 일, 포인트, 시간대·마감, 반복 요일을 정해요. ↑↓로 순서를 바꿔요.',
+  body.append(section('할 일', '구성원별 할 일, 시간대·마감, 반복 요일을 정해요. ↑↓로 순서를 바꿔요.',
     h('button', { class: 'btn btn-primary', onclick: () => edit() }, '+ 할 일 추가'),
     groups.map(([s, l]) => h('div', { class: 'set-group' }, h('h3', {}, s.name),
       h('div', { class: 'list' }, l.map((t) => h('div', { class: `list-row ${t.active ? '' : 'inactive'}` },
         h('span', { class: 'list-icon' }, t.icon),
         h('div', { class: 'grow' },
           h('b', {}, t.name), ' ', t.is_family ? h('span', { class: 'tag tag-family' }, '가족 공동') : null, !t.active && h('span', { class: 'tag' }, '꺼짐'),
-          h('div', { class: 'muted small' }, `${t.points}점 · ${t.deadline ? `~${t.deadline}` : '마감 없음'} · ${daysText(t.days)}`)),
+          h('div', { class: 'muted small' }, `${styleOf(store.boot.settings).gain}${t.points > 1 ? `×${t.points}` : ''} · ${t.deadline ? `~${t.deadline}` : '마감 없음'} · ${daysText(t.days)}`)),
         h('span', { class: 'avatars' }, t.assignees.map((id) => store.member(id)).filter(Boolean).map((m) => avatar(m, 'xs'))),
         h('div', { class: 'row-actions' },
           h('button', { class: 'icon-btn', 'aria-label': '위로', onclick: () => move(t.id, -1) }, '↑'),
@@ -193,25 +238,25 @@ async function rewards(body, store) {
       { key: 'target', label: '대상', type: 'select', options: [['member', '구성원'], ['family', '가족 합계']] },
       { key: 'member_id', label: '구성원', type: 'select', options: [['', '모든 아이 (부모 보상 설정 시 부모 포함)'], ...ms.map((m) => [m.id, m.name])], when: (v) => v.target === 'member' },
       { key: 'period', label: '기간', type: 'select', options: [['day', '1일'], ['week', '1주'], ['month', '1달']] },
-      { key: 'threshold', label: '기준 점수', type: 'number', min: 1 },
+      { key: 'threshold', label: `몇 ${styleOf(store.boot.settings).unit} 모으면? (할 일 1개 = 1${styleOf(store.boot.settings).unit})`, type: 'number', min: 1 },
       { key: 'content', label: '보상 내용 (예: 아이스크림 🍦)', maxlength: 100 },
     ],
     onSave: async (v) => { r.id ? await put(`/api/rewards/${r.id}`, v) : await post('/api/rewards', v); await refresh(); },
     onDelete: r.id ? async () => { await del(`/api/rewards/${r.id}`); await refresh(); } : null,
   });
-  body.append(section('보상', '기간이 끝나면 자동 정산해서 기준을 넘은 구성원에게 축하 화면을 보여줘요. 같은 대상에 여러 단계를 만들 수 있어요.',
+  body.append(section('보상', `보상 하나가 ${styleOf(store.boot.settings).coll} 하나가 돼요. 예) 30${styleOf(store.boot.settings).unit} → 아이스크림, 55${styleOf(store.boot.settings).unit} → 영화. 기간이 끝나면 자동으로 정리해 축하 화면을 보여줘요.`,
     settingsForm(store, [
-      { key: 'reward_period', label: '기본 보상 기간 (점수 현황 기본 탭)', type: 'select', options: [['day', '1일'], ['week', '1주'], ['month', '1달']] },
+      { key: 'reward_period', label: '기본 보상 기간 (모으기 화면 기본 탭)', type: 'select', options: [['day', '1일'], ['week', '1주'], ['month', '1달']] },
       { key: 'week_start', label: '주간 시작 요일', type: 'select', options: dayNames.map((n, i) => [i, `${n}요일`]) },
       { key: 'month_start', label: '월간 시작 날짜 (1~28일)', type: 'number', min: 1, max: 28 },
-      { key: 'parents_rewarded', label: '부모 점수도 보상 대상 ("모든 아이" 보상에 부모 포함)', type: 'checkbox' },
+      { key: 'parents_rewarded', label: '부모도 보상 대상 ("모든 아이" 보상에 부모 포함)', type: 'checkbox' },
     ]),
     h('div', { class: 'list' }, list.map((r) => {
       const m = ms.find((x) => x.id === r.member_id);
       return h('div', { class: 'list-row' },
         r.target === 'family' ? h('span', { class: 'list-icon' }, '👨‍👩‍👧‍👦') : m ? avatar(m, 'sm') : h('span', { class: 'list-icon' }, '🧒'),
         h('div', { class: 'grow' }, h('b', {}, r.content),
-          h('div', { class: 'muted small' }, `${r.target === 'family' ? '가족 합계' : m ? m.name : '모든 아이'} · ${P[r.period]} · ${r.threshold}점 이상`)),
+          h('div', { class: 'muted small' }, `${r.target === 'family' ? '가족 합계' : m ? m.name : '모든 아이'} · ${P[r.period]} · ${r.threshold}${styleOf(store.boot.settings).unit} 모으면`)),
         h('button', { class: 'btn btn-sm btn-primary', onclick: () => edit(r) }, '수정'));
     })),
     h('button', { class: 'btn btn-primary', onclick: () => edit() }, '+ 보상 추가')));
@@ -222,8 +267,7 @@ function okay(body, store) {
   const s = store.boot.settings;
   const vals = { ...s, encouragements: (s.encouragements || []).join('\n'), cheers: (s.cheers || []).join('\n') };
   const f = form([
-    { key: 'late_allowed', label: '마감 지난 뒤 "늦게라도 했어요" 체크 허용', type: 'checkbox' },
-    { key: 'late_ratio', label: '늦은 체크 포인트 비율', type: 'select', options: [['1', '100% (그대로)'], ['0.75', '75%'], ['0.5', '50% (절반)'], ['0.25', '25%'], ['0', '0%']] },
+    { key: 'late_allowed', label: '마감 지난 뒤 "늦게라도 했어요" 체크 허용 (똑같이 1개, 연한 색으로 표시)', type: 'checkbox' },
     { key: 'rest_tickets_per_week', label: '쉬어가기권 (주당 장수)', type: 'number', min: 0, max: 7 },
     { key: 'encouragements', label: '격려 문구 (한 줄에 하나)', type: 'textarea', rows: 5 },
     { key: 'cheers', label: '체크할 때 나오는 칭찬 (한 줄에 하나, 랜덤)', type: 'textarea', rows: 5 },
@@ -233,7 +277,7 @@ function okay(body, store) {
       const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
       try {
         await put('/api/settings', {
-          late_allowed: f.values.late_allowed, late_ratio: f.values.late_ratio, rest_tickets_per_week: f.values.rest_tickets_per_week,
+          late_allowed: f.values.late_allowed, late_ratio: 1, rest_tickets_per_week: f.values.rest_tickets_per_week,
           encouragements: lines(f.values.encouragements), cheers: lines(f.values.cheers),
         });
         toast('저장했어요 ✅');
